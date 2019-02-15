@@ -15,3 +15,14 @@ Refer to protobuf definitions in ```backend-protobuf```.
 | new_store | Publish to | Store | - | - | - |
 | request_store | Request | DataRequest | - | Response | client |
 | scan_store | Request | ScanRequest | - | Response | client |
+
+
+### new_store
+
+Pushes the results of its operation to ```backend-subscribe```.
+
+| Code | Message | Description |
+| ---- | ------- | ----------- |
+| 200 | Inserted bite's key | Store operation was successful |
+| 400 | 400 Bad Request | Key could not be marshalled properly |
+| 500 | 500 Internal Server Error | Error storing the bite in badger |

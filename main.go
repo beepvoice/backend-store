@@ -52,13 +52,22 @@ func main() {
 func NewStore(m *nats.Msg) {
   storeRequest := Store{}
   if err := proto.Unmarshal(m.Data, &storeRequest); err != nil {
-    log.Println(err)
+    log.Println(err) // Fail quietly since protobuf data is needed torespond
     return
   }
 
   key, err := MarshalKey(storeRequest.Type, storeRequest.Bite.Key, storeRequest.Bite.Start)
   if err != nil {
     log.Println(err)
+    errRes := Response {
+      Code: 400,
+      Message: http.StatusText(http.StatusBadRequest),
+      Client: storeRequest.Bite.Client,
+    }
+    errResBytes, errResErr := proto.Marshal(&errRes)
+    if errResErr == nil {
+      nc.Publish("res", errResBytes)
+    }
     return
   }
 
@@ -70,7 +79,26 @@ func NewStore(m *nats.Msg) {
 
   if err != nil {
     log.Println(err)
+    errRes := Response {
+      Code: 500,
+      Message: http.StatusText(http.StatusInternalServerError),
+      Client: storeRequest.Bite.Client,
+    }
+    errResBytes, errResErr := proto.Marshal(&errRes)
+    if errResErr == nil {
+      nc.Publish("res", errResBytes)
+    }
     return
+  } else {
+    res := Response {
+      Code: 200,
+      Message: []byte(key),
+      Client: storeRequest.Bite.Client,
+    }
+    resBytes, resErr := proto.Marshal(&res)
+    if resErr == nil {
+      nc.Publish("res", resBytes)
+    }
   }
 }
 
