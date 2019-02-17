@@ -61,7 +61,7 @@ func NewStore(m *nats.Msg) {
     log.Println(err)
     errRes := Response {
       Code: 400,
-      Message: http.StatusText(http.StatusBadRequest),
+      Message: []byte(http.StatusText(http.StatusBadRequest)),
       Client: storeRequest.Bite.Client,
     }
     errResBytes, errResErr := proto.Marshal(&errRes)
@@ -81,7 +81,7 @@ func NewStore(m *nats.Msg) {
     log.Println(err)
     errRes := Response {
       Code: 500,
-      Message: http.StatusText(http.StatusInternalServerError),
+      Message: []byte(http.StatusText(http.StatusInternalServerError)),
       Client: storeRequest.Bite.Client,
     }
     errResBytes, errResErr := proto.Marshal(&errRes)
@@ -116,23 +116,22 @@ func RequestStore(m *nats.Msg) {
 		if err != nil {
 			return err
 		}
-    err = item.Value(func(value []byte) error {
-      res := Response {
-        Code: 200,
-        Message: value,
-      }
-      resBytes, resErr := proto.Marshal(&res)
-
-      if resErr != nil {
-        return resErr
-      }
-
-      nc.Publish(m.Reply, resBytes)
-      return nil
-    })
+    value, err := item.Value()
     if err != nil {
       return err
     }
+
+    res := Response {
+      Code: 200,
+      Message: value,
+    }
+    resBytes, err := proto.Marshal(&res)
+
+    if err != nil {
+      return err
+    }
+
+    nc.Publish(m.Reply, resBytes)
     return nil
 	})
 
