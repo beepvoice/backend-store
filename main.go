@@ -2,10 +2,11 @@ package main
 
 import (
   "encoding/json"
-  "flag"
   "log"
   "net/http"
+  "os"
 
+  "github.com/joho/godotenv"
   "github.com/dgraph-io/badger"
   "github.com/nats-io/go-nats"
   "github.com/golang/protobuf/proto"
@@ -18,17 +19,19 @@ var db *badger.DB
 var nc *nats.Conn
 
 func main() {
-  // Parse flags
-  flag.StringVar(&dbPath, "dbpath", "/tmp/badger", "path to store data")
-  flag.StringVar(&natsHost, "nats", "nats://localhost:4222", "host and port of NATS")
-	flag.Parse()
+  // Load .env
+  err := godotenv.Load()
+  if err != nil {
+    log.Fatal("Error loading .env file")
+  }
+  dbPath = os.Getenv("DBPATH")
+  natsHost = os.Getenv("NATS")
 
   // Open badger
 	log.Printf("starting badger at %s", dbPath)
 	opts := badger.DefaultOptions
 	opts.Dir = dbPath
 	opts.ValueDir = dbPath
-	var err error
 	db, err = badger.Open(opts)
 	if err != nil {
 		log.Fatal(err)
