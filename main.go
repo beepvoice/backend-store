@@ -6,6 +6,8 @@ import (
   "net/http"
   "os"
 
+  . "store/backend-protobuf/go"
+
   "github.com/joho/godotenv"
   "github.com/dgraph-io/badger"
   "github.com/nats-io/go-nats"
