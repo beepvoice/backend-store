@@ -5,6 +5,7 @@ import (
   "log"
   "net/http"
   "os"
+  "strconv"
 
   . "store/backend-protobuf/go"
 
@@ -12,8 +13,10 @@ import (
   "github.com/dgraph-io/badger"
   "github.com/nats-io/go-nats"
   "github.com/golang/protobuf/proto"
+  "github.com/julienschmidt/httprouter"
 )
 
+var listen string
 var dbPath string
 var natsHost string
 
@@ -28,6 +31,7 @@ func main() {
   }
   dbPath = os.Getenv("DBPATH")
   natsHost = os.Getenv("NATS")
+  listen = os.Getenv("LISTEN")
 
   // Open badger
 	log.Printf("starting badger at %s", dbPath)
@@ -45,34 +49,29 @@ func main() {
   if err != nil {
 		log.Fatal(err)
 	}
-  nc.Subscribe("new_store", NewStore)
-
-  nc.Subscribe("request_store", RequestStore)
-  nc.Subscribe("scan_store", ScanStore)
+  nc.Subscribe("store", NewStore)
   defer nc.Close()
 
-  select { } // Wait forever
+  // Routes
+  router := httprouter.New()
+  router.GET("/:type/:key/scan", ScanStore)
+  router.GET("/:type/:key/start/:start", GetStore)
+
+  // Start server
+  log.Printf("starting server on %s", listen)
+  log.Fatal(http.ListenAndServe(listen, router))
 }
 
 func NewStore(m *nats.Msg) {
   storeRequest := Store{}
   if err := proto.Unmarshal(m.Data, &storeRequest); err != nil {
-    log.Println(err) // Fail quietly since protobuf data is needed torespond
+    log.Println(err) // Just log errors
     return
   }
 
   key, err := MarshalKey(storeRequest.Type, storeRequest.Bite.Key, storeRequest.Bite.Start)
   if err != nil {
     log.Println(err)
-    errRes := Response {
-      Code: 400,
-      Message: []byte(http.StatusText(http.StatusBadRequest)),
-      Client: storeRequest.Bite.Client,
-    }
-    errResBytes, errResErr := proto.Marshal(&errRes)
-    if errResErr == nil {
-      nc.Publish("res", errResBytes)
-    }
     return
   }
 
@@ -81,69 +80,52 @@ func NewStore(m *nats.Msg) {
 		err := txn.Set(key, storeRequest.Bite.Data)
 		return err
 	})
-
   if err != nil {
     log.Println(err)
-    errRes := Response {
-      Code: 500,
-      Message: []byte(http.StatusText(http.StatusInternalServerError)),
-      Client: storeRequest.Bite.Client,
-    }
-    errResBytes, errResErr := proto.Marshal(&errRes)
-    if errResErr == nil {
-      nc.Publish("res", errResBytes)
-    }
     return
-  } else {
-    res := Response {
-      Code: 200,
-      Message: []byte(key),
-      Client: storeRequest.Bite.Client,
-    }
-    resBytes, resErr := proto.Marshal(&res)
-    if resErr == nil {
-      nc.Publish("res", resBytes)
-    }
   }
 }
 
-func RequestStore(m *nats.Msg) {
-  req := DataRequest{}
-  if err := proto.Unmarshal(m.Data, &req); err != nil {
-    log.Println(err)
+func ParseStartString(start string) (uint64, error) {
+  return strconv.ParseUint(start, 10, 64)
+}
+
+func GetStore(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
+  // Get params
+  storeType := p.ByName("type")
+  key := p.ByName("key")
+
+  start, err := ParseStartString(p.ByName("start"))
+  if err != nil {
+    http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
     return
   }
 
-  key, err := MarshalKey(req.Type, req.Key, req.Start)
+  storeKey, err := MarshalKey(storeType, key, start)
+  if err != nil {
+    http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+    return
+  }
 
   err = db.View(func(txn *badger.Txn) error {
-		item, err := txn.Get(key)
-		if err != nil {
-			return err
-		}
+    item, err := txn.Get(storeKey)
+    if err != nil {
+      return err
+    }
+
     value, err := item.Value()
     if err != nil {
       return err
     }
 
-    res := Response {
-      Code: 200,
-      Message: value,
-    }
-    resBytes, err := proto.Marshal(&res)
-
-    if err != nil {
-      return err
-    }
-
-    nc.Publish(m.Reply, resBytes)
+    w.Write(value)
     return nil
-	})
+  })
 
-	if err != nil {
-    res := ReplyError(err.Error(), 400)
-    nc.Publish(m.Reply, res)
-	}
+  if err != nil {
+    http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+    return
+  }
 }
 
 type BitesList struct {
@@ -152,29 +134,37 @@ type BitesList struct {
 	Next     uint64   `json:"next"` // One bite after starts. Hint for how many steps the client can skip
 }
 
-func ScanStore(m *nats.Msg) {
-  req := ScanRequest {}
-  if err := proto.Unmarshal(m.Data, &req); err != nil {
-    log.Println(err)
-    return
-  }
+func ScanStore(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
+  // Get params
+  storeType := p.ByName("type")
+  key := p.ByName("key")
 
-  prefix, err := MarshalKeyPrefix(req.Type, req.Key)
-
+  // Get querystring values
+  from, err := ParseStartString(r.FormValue("from"))
   if err != nil {
-    res := ReplyError(http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-    nc.Publish(m.Reply, res)
+    http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
     return
   }
 
-  fromKey, err := MarshalKey(req.Type, req.Key, req.From)
-	if err != nil {
-    res := ReplyError(http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-    nc.Publish(m.Reply, res)
-		return
-	}
+  to, err := ParseStartString(r.FormValue("to"))
+  if err != nil {
+    http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+    return
+  }
 
-  bitesList := BitesList {}
+  prefix, err := MarshalKeyPrefix(storeType, key)
+  if err != nil {
+    http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+    return
+  }
+
+  fromKey, err := MarshalKey(storeType, key, from)
+  if err != nil {
+    http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+    return
+  }
+
+  bitesList := BitesList{}
 
   err = db.View(func(txn *badger.Txn) error {
 		opts := badger.DefaultIteratorOptions
@@ -202,12 +192,11 @@ func ScanStore(m *nats.Msg) {
 		bitesList.Previous = start
 
 		return nil
-	})
-	if err != nil {
-    res := ReplyError(err.Error(), http.StatusBadRequest)
-    nc.Publish(m.Reply, res)
-		return
-	}
+  })
+  if err != nil {
+    http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+    return
+  }
 
   err = db.View(func(txn *badger.Txn) error {
 		opts := badger.DefaultIteratorOptions
@@ -223,7 +212,7 @@ func ScanStore(m *nats.Msg) {
 			if err != nil {
 				continue
 			}
-			if start > req.To {
+			if start > to {
 				// A key was found that is greater than to
 				// Save that as next
 				bitesList.Next = start
@@ -235,27 +224,13 @@ func ScanStore(m *nats.Msg) {
 
 		return nil
 	})
-	if err != nil {
-    res := ReplyError(err.Error(), http.StatusBadRequest)
-    nc.Publish(m.Reply, res)
-		return
-	}
-
-	jsonString, err := json.Marshal(&bitesList)
-  res := Response {
-    Code: 200,
-    Message: []byte(jsonString),
+  if err != nil {
+    http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+    return
   }
-  resBytes, _ := proto.Marshal(&res)
-  nc.Publish(m.Reply, resBytes)
+
+  // Respond
+  w.Header().Set("Content-Type", "application/json")
+  json.NewEncoder(w).Encode(bitesList)
 }
 
-func ReplyError(msg string, code uint32) []byte {
-  res := Response {
-    Code: code,
-    Message: []byte(msg),
-  }
-  resBytes, _ := proto.Marshal(&res)
-
-  return resBytes
-}
