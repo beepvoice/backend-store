@@ -13,6 +13,7 @@ Supply environment variables by either exporting them or editing ```.env```.
 | DBPATH | Path to store badger files in. Please make sure it exists. | /tmp/badger |
 | NATS | Host and port of nats | nats://localhost:4222 |
 | LISTEN | Host and port to listen on | :80 |
+| PERMISSIONS_HOST | URL of `backend-permissions` | http://permissions |
 
 ## Key format
 
