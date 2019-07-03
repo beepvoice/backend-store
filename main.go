@@ -84,6 +84,11 @@ func AuthMiddleware(next httprouter.Handle) httprouter.Handle {
       return
     }
 
+    if client.UserId == "" || client.ClientId == "" {
+      http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+      return
+    }
+
     context := context.WithValue(r.Context(), "user", client.UserId)
     next(w, r.WithContext(context), p)
   }
@@ -93,6 +98,10 @@ func PermissionMiddleware(next httprouter.Handle) httprouter.Handle {
   return func (w http.ResponseWriter, r *http.Request, p httprouter.Params) {
     userID := r.Context().Value("user").(string)
     conversationID := p.ByName("key")
+    if conversationID == "" {
+      http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+      return
+    }
 
     response, err := http.Get(permissionsHost + "/user/" + userID + "/conversation/" + conversationID)
     if err != nil {
@@ -179,6 +188,10 @@ type BitesList struct {
 func ScanStore(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
   // Get params
   storeType := p.ByName("type")
+  if storeType == "" {
+    http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+    return
+  }
   key := p.ByName("key")
 
   // Get querystring values
