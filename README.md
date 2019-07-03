@@ -1,6 +1,6 @@
 # backend-store
 
-Single Badger store to serve bite, transcription and any others. Is kinda bite-centric, so required values revolve around a Bite. Receives stores through [NATS](https://nats.io) while data is retrieved via a http api.
+Single Badger store to serve bite, transcription and any others. Is kinda bite-centric, so required values revolve around a Bite. Receives stores through [NATS](https://nats.io) while data is retrieved via a http api. Checks `backend-permissions` for permissions to access the store.
 
 **Relies on being behind a traefik instance forwarding auth to backend-auth for authentication**
 
@@ -76,6 +76,7 @@ All numbers are Unix epoch timestamps. `starts` goes on for as long as it needs 
 | Code | Description |
 | ---- | ----------- |
 | 400 | From/to are not unix epoch/Error marshalling key from params. |
+| 401 | `permissions` denied permission for user to access this store. |
 | 500 | Error scanning badger store. |
 
 ---
@@ -105,4 +106,5 @@ Raw data of the bite.
 | Code | Description |
 | ---- | ----------- |
 | 400 | Error marshalling key from params/`start` was not a valid Epoch timestamp. |
+| 401 | `permissions` denied permission for user to access this store. |
 | 500 | Error retrieving bite from store. |

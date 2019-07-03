@@ -1,6 +1,7 @@
 package main
 
 import (
+  "context"
   "encoding/json"
   "log"
   "net/http"
@@ -19,6 +20,7 @@ import (
 var listen string
 var dbPath string
 var natsHost string
+var permissionsHost string
 
 var db *badger.DB
 var nc *nats.Conn
@@ -32,6 +34,7 @@ func main() {
   dbPath = os.Getenv("DBPATH")
   natsHost = os.Getenv("NATS")
   listen = os.Getenv("LISTEN")
+  permissionsHost = os.Getenv("PERMISSIONS_HOST")
 
   // Open badger
 	log.Printf("starting badger at %s", dbPath)
@@ -54,12 +57,51 @@ func main() {
 
   // Routes
   router := httprouter.New()
-  router.GET("/:type/:key/scan", ScanStore)
-  router.GET("/:type/:key/start/:start", GetStore)
+  router.GET("/:type/:key/scan", AuthMiddleware(PermissionMiddleware(ScanStore)))
+  router.GET("/:type/:key/start/:start", AuthMiddleware(PermissionMiddleware(GetStore)))
 
   // Start server
   log.Printf("starting server on %s", listen)
   log.Fatal(http.ListenAndServe(listen, router))
+}
+
+type RawClient struct {
+  UserId   string `json:"userid"`
+  ClientId string `json:"clientid"`
+}
+func AuthMiddleware(next httprouter.Handle) httprouter.Handle {
+  return func (w http.ResponseWriter, r *http.Request, p httprouter.Params) {
+    ua := r.Header.Get("X-User-Claim")
+    if ua == "" {
+      http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+      return
+    }
+
+    var client RawClient
+    err := json.Unmarshal([]byte(ua), &client)
+    if err != nil {
+      http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+      return
+    }
+
+    context := context.WithValue(r.Context(), "user", client.UserId)
+    next(w, r.WithContext(context), p)
+  }
+}
+
+func PermissionMiddleware(next httprouter.Handle) httprouter.Handle {
+  return func (w http.ResponseWriter, r *http.Request, p httprouter.Params) {
+    userID := r.Context().Value("user").(string)
+    conversationID := p.ByName("key")
+
+    response, err := http.Get(permissionsHost + "/user/" + userID + "/conversation/" + conversationID)
+    if err != nil {
+      http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+      return
+    }
+    response.Body.Close()
+    next(w, r, p)
+  }
 }
 
 func NewStore(m *nats.Msg) {
